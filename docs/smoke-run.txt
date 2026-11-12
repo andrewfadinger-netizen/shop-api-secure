@@ -1,106 +1,181 @@
-Прогон npm run smoke против живого сервера и службы MongoDB 9.0 (Windows), 12.11.2026
+Прогон npm run smoke против живого сервера и службы MongoDB 9.0 (Windows), bcrypt 12 раундов, 12.11.2026
 
-OK  200 GET    /api/health — сервер и БД доступны
+OK  200 GET    /api/health [без токена] — сервер и БД доступны
 OK      проверка: health.db = connected
-OK  200 GET    /api/categories?page=1&limit=2&sort=name — список категорий, пагинация
-OK      проверка: meta.limit=2, data ≤ 2, total ≥ 1
-OK  201 POST   /api/categories — создать категорию
+OK      проверка: нет заголовка X-Powered-By (Express скрыт)
+OK      проверка: Helmet: X-Content-Type-Options = nosniff
+OK      проверка: Helmet: есть Content-Security-Policy
+OK  200 GET    /api/health [без токена] — CORS: запрос с чужого сайта
+OK      проверка: CORS: чужому Origin доступ не выдан
+OK  200 GET    /api/health [без токена] — CORS: запрос с разрешённого сайта
+OK      проверка: CORS: разрешён http://localhost:3000
+OK  201 POST   /api/auth/register [без токена] — регистрация (попытка указать role=admin)
+OK      проверка: роль всё равно customer — стать админом при регистрации нельзя
+OK      проверка: выданы accessToken и refreshToken
+OK      проверка: в ответе нет пароля/хеша
+OK  400 POST   /api/auth/register [без токена] — слабый пароль
+OK      проверка: ошибка в поле password
+OK  409 POST   /api/auth/register [без токена] — повторный email
+OK  400 POST   /api/auth/register [без токена] — NoSQL-инъекция в email
+OK  201 POST   /api/auth/register [без токена] — регистрация второго покупателя
+OK  401 POST   /api/auth/login [без токена] — неверный пароль
+OK  401 POST   /api/auth/login [без токена] — несуществующий email
+OK      проверка: одинаковое сообщение — нельзя узнать, есть ли такой email
+OK  400 POST   /api/auth/login [без токена] — NoSQL-инъекция {"$ne": null} при входе
+OK  200 POST   /api/auth/login [без токена] — вход покупателя А
+OK      проверка: в ответе нет пароля/хеша
+OK      проверка: JWT: alg HS256, sub = id, role = customer
+OK      проверка: JWT живёт ≤ 15 мин (900 с)
+OK      проверка: в payload нет email и других персональных данных
+OK  200 POST   /api/auth/login [без токена] — вход администратора
+OK  401 GET    /api/auth/me [без токена] — профиль без токена
+OK  401 GET    /api/auth/me — мусор вместо токена
+OK  401 GET    /api/stats/orders-by-status — поддельный токен alg=none с role=admin
+OK  401 GET    /api/stats/orders-by-status — токен, подписанный чужим ключом
+OK  401 GET    /api/auth/me — просроченный токен
+OK      проверка: сообщение «срок действия истёк»
+OK  401 GET    /api/auth/me — токен для другого приложения (audience)
+OK  200 GET    /api/auth/me — свой профиль
+OK      проверка: это А, секретных полей нет
+OK  200 PATCH  /api/auth/me — правка профиля (попытка сменить role и email)
+OK      проверка: имя изменилось, role и email — нет
+OK  200 GET    /api/categories?page=1&limit=2&sort=name [без токена] — список категорий без входа
+OK      проверка: пагинация: limit=2
+OK      проверка: rate limit: заголовки RateLimit-Policy ("1000-in-15min"; q=1000; w=900; pk=:YmIwY2Q1MTM2YWU1:) и RateLimit
+OK  401 POST   /api/categories [без токена] — создать категорию без входа
+OK  403 POST   /api/categories — создать категорию покупателем
+OK  201 POST   /api/categories — создать категорию администратором
 OK  409 POST   /api/categories — дубль названия (без учёта регистра)
-OK  400 POST   /api/categories — валидация: короткое имя и плохой slug
-OK      проверка: в details есть ошибки name и slug
-OK  200 GET    /api/categories/6af56b08cfce9427ca002380 — получить категорию по id
-OK      проверка: productCount = 0 (виртуальный populate)
-OK  200 GET    /api/categories?q=%D1%82%D0%B5%D1%81%D1%82-%D0%BA%D0%B0%D1%82%D0%B5%D0%B3%D0%BE%D1%80%D0%B8%D1%8F%20mwd8a5sc — поиск категории ?q=
-OK      проверка: найдена ровно 1 категория
-OK  200 PATCH  /api/categories/6af56b08cfce9427ca002380 — изменить категорию
+OK  400 POST   /api/categories — валидация
+OK      проверка: ошибки name и slug
+OK  200 GET    /api/categories/6af57171dce561c203fd56cc [без токена] — категория по id
+OK      проверка: productCount = 0
+OK  403 PATCH  /api/categories/6af57171dce561c203fd56cc — изменить категорию покупателем
+OK  200 PATCH  /api/categories/6af57171dce561c203fd56cc — изменить категорию администратором
 OK      проверка: описание обновилось
-OK  400 PATCH  /api/categories/6af56b08cfce9427ca002380 — нельзя менять _id (белый список полей)
-OK  400 GET    /api/categories/123 — некорректный id
-OK  404 GET    /api/categories/64b000000000000000000000 — несуществующий id
-OK  400 GET    /api/categories?sort=password — сортировка по запрещённому полю
-OK  201 POST   /api/users — создать пользователя со встроенным адресом
-OK      проверка: единственный адрес стал адресом по умолчанию
-OK  409 POST   /api/users — дубль email (email приводится к нижнему регистру)
-OK  400 POST   /api/users — валидация email и телефона
-OK      проверка: в details есть email и phone
-OK  200 GET    /api/users?city=%D0%9A%D0%B0%D1%80%D0%B0%D0%B3%D0%B0%D0%BD%D0%B4%D0%B0&q=test.mwd8a5sc%40example.com — фильтр по городу во встроенном массиве
+OK  400 GET    /api/categories/123 [без токена] — некорректный id
+OK  404 GET    /api/categories/64b000000000000000000000 [без токена] — несуществующий id
+OK  400 GET    /api/categories?sort=password [без токена] — сортировка по запрещённому полю
+OK  401 GET    /api/users [без токена] — список пользователей без входа
+OK  403 GET    /api/users — список пользователей покупателем
+OK  200 GET    /api/users?limit=100 — список пользователей администратором
+OK      проверка: пользователи есть, паролей/хешей в ответе нет
+OK  201 POST   /api/users — администратор создаёт пользователя
+OK      проверка: пароля в ответе нет
+OK  400 POST   /api/users — пользователь без пароля
+OK  200 GET    /api/users?city=%D0%9A%D0%B0%D1%80%D0%B0%D0%B3%D0%B0%D0%BD%D0%B4%D0%B0&q=buyer.a.mwd99awq%40example.com — фильтр по городу во встроенном массиве
 OK      проверка: найден 1 пользователь
-OK  200 PATCH  /api/users/6af56b08cfce9427ca002383 — изменить пользователя
+OK  200 PATCH  /api/users/6af57171dce561c203fd56d9 — изменить пользователя
 OK      проверка: телефон обновился
-OK  200 GET    /api/users/6af56b08cfce9427ca002383 — получить пользователя
-OK  400 GET    /api/users?role=superuser — неверное значение фильтра role
-OK  201 POST   /api/products — создать товар (ссылка на категорию)
-OK      проверка: category подтянута через populate
-OK      проверка: теги приведены к нижнему регистру
-OK      проверка: rating с клиента проигнорирован (вычисляется сервером)
-OK  400 POST   /api/products — ссылка на несуществующую категорию
-OK      проверка: ошибка в поле category
-OK  400 POST   /api/products — отрицательная цена
-OK  200 GET    /api/products?category=6af56b08cfce9427ca002380 — фильтр по категории
-OK      проверка: 1 товар, в списке нет reviews (проекция)
-OK  200 GET    /api/products?minPrice=50000&maxPrice=300000&inStock=true&sort=-price&limit=5 — фильтр по цене/наличию + сортировка
-OK      проверка: цены в диапазоне и по убыванию: 289990, 219990, 169990, 109990, 99990
-OK      проверка: все в наличии
-OK  200 GET    /api/products?q=%D1%81%D0%BC%D0%B0%D1%80%D1%82%D1%84%D0%BE%D0%BD%D1%8B — полнотекстовый поиск (рус. морфология)
-OK      проверка: найдено товаров: 4
-OK  200 GET    /api/products?tag=android&tag=samsung — фильтр по нескольким тегам
-OK      проверка: у всех есть оба тега
-OK  400 GET    /api/products?minPrice=abc — нечисловой minPrice
-OK  200 GET    /api/products/6af56b08cfce9427ca00238a — получить товар
-OK  200 PATCH  /api/products/6af56b08cfce9427ca00238a — изменить цену и остаток
+OK  409 PATCH  /api/users/6af57155f50361ce0c57d60b — админ не может понизить сам себя
+OK  200 GET    /api/users/6af5716fdce561c203fd56bc?include=orders — пользователь с заказами
+OK  400 GET    /api/users?role=superuser — неверный фильтр role
+OK  403 POST   /api/products — создать товар покупателем
+OK  201 POST   /api/products — создать товар администратором
+OK      проверка: category подтянута populate
+OK      проверка: rating с клиента проигнорирован
+OK  400 POST   /api/products — несуществующая категория
+OK  200 GET    /api/products?category=6af57171dce561c203fd56cc [без токена] — каталог без входа: фильтр по категории
+OK      проверка: 1 товар, отзывы в списке не отдаются
+OK  200 GET    /api/products?minPrice=50000&maxPrice=300000&inStock=true&sort=-price&limit=5 [без токена] — фильтр по цене + сортировка
+OK      проверка: цены по убыванию: 289990, 219990, 169990, 109990, 99990
+OK  200 GET    /api/products?q=%D1%81%D0%BC%D0%B0%D1%80%D1%82%D1%84%D0%BE%D0%BD%D1%8B [без токена] — полнотекстовый поиск
+OK      проверка: найдено: 4
+OK  200 GET    /api/products?limit=1 [без токена] — всего товаров
+OK  200 GET    /api/products?price[$gt]=0&category[$ne]=x&limit=1 [без токена] — попытка передать операторы MongoDB в query
+OK      проверка: операторы в query не превратились в фильтр (Express 5 не разбирает вложенные объекты)
+OK  403 PATCH  /api/products/6af57171dce561c203fd56de — изменить цену покупателем
+OK  200 PATCH  /api/products/6af57171dce561c203fd56de — изменить цену и остаток администратором
 OK      проверка: цена 89990, остаток 3
-OK  400 PATCH  /api/products/6af56b08cfce9427ca00238a — дробный остаток
-OK  200 GET    /api/categories/6af56b08cfce9427ca002380 — категория после добавления товара
-OK      проверка: productCount = 1
-OK  409 DELETE /api/categories/6af56b08cfce9427ca002380 — нельзя удалить категорию с товарами
-OK  400 POST   /api/products/6af56b08cfce9427ca00238a/reviews — оценка вне 1–5
-OK  201 POST   /api/products/6af56b08cfce9427ca00238a/reviews — добавить отзыв
+OK  409 DELETE /api/categories/6af57171dce561c203fd56cc — нельзя удалить категорию с товарами
+OK  401 POST   /api/products/6af57171dce561c203fd56de/reviews [без токена] — отзыв без входа
+OK  400 POST   /api/products/6af57171dce561c203fd56de/reviews — оценка вне 1–5
+OK  201 POST   /api/products/6af57171dce561c203fd56de/reviews — отзыв А (попытка подставить user = Б)
+OK      проверка: автор отзыва — А (из токена), подмена не сработала
 OK      проверка: rating пересчитан: 5 / 1
-OK  409 POST   /api/products/6af56b08cfce9427ca00238a/reviews — повторный отзыв того же пользователя
-OK  200 GET    /api/products/6af56b08cfce9427ca00238a/reviews — список отзывов
-OK      проверка: автор отзыва подтянут populate
-OK  200 PATCH  /api/products/6af56b08cfce9427ca00238a/reviews/6af56b08cfce9427ca00238e — изменить отзыв
+OK  409 POST   /api/products/6af57171dce561c203fd56de/reviews — повторный отзыв того же пользователя
+OK  200 GET    /api/products/6af57171dce561c203fd56de/reviews [без токена] — отзывы без входа
+OK      проверка: автор подтянут, без email и пароля
+OK  403 PATCH  /api/products/6af57171dce561c203fd56de/reviews/6af57171dce561c203fd56e4 — Б меняет чужой отзыв
+OK  200 PATCH  /api/products/6af57171dce561c203fd56de/reviews/6af57171dce561c203fd56e4 — А меняет свой отзыв
 OK      проверка: rating.avg = 4
-OK  404 PATCH  /api/products/6af56b08cfce9427ca00238a/reviews/64b000000000000000000000 — несуществующий отзыв
-OK  201 POST   /api/orders — создать заказ
+OK  401 GET    /api/orders [без токена] — заказы без входа
+OK  201 POST   /api/orders — А оформляет заказ (попытка указать user = Б)
+OK      проверка: заказ оформлен на А — user из токена
 OK      проверка: total посчитан сервером: 179980
-OK      проверка: адрес взят из профиля (копия)
-OK      проверка: name и price скопированы в позицию (snapshot)
-OK      проверка: статус new
-OK  200 GET    /api/products/6af56b08cfce9427ca00238a — остаток после заказа
+OK      проверка: адрес — копия из профиля А
+OK  200 GET    /api/products/6af57171dce561c203fd56de [без токена] — остаток после заказа
 OK      проверка: stock: 3 - 2 = 1
-OK  409 POST   /api/orders — не хватает товара на складе
-OK      проверка: в ответе available = 1
+OK  409 POST   /api/orders — не хватает товара
+OK      проверка: available = 1
 OK  400 POST   /api/orders — пустой заказ
-OK  400 POST   /api/orders — несуществующий пользователь
-OK  200 GET    /api/orders?user=6af56b08cfce9427ca002383 — заказы пользователя
-OK      проверка: 1 заказ, user подтянут populate
-OK  200 GET    /api/orders?status=delivered&sort=-total&limit=3 — фильтр по статусу из seed
-OK      проверка: все delivered
-OK  400 GET    /api/orders?status=lost — неверный статус в фильтре
-OK  200 GET    /api/orders/6af56b08cfce9427ca002396 — получить заказ
-OK      проверка: items.product подтянут populate
-OK  409 PATCH  /api/orders/6af56b08cfce9427ca002396 — недопустимый переход new -> delivered
-OK  400 PATCH  /api/orders/6af56b08cfce9427ca002396 — состав заказа менять нельзя
-OK  200 PATCH  /api/orders/6af56b08cfce9427ca002396 — оплата: new -> paid
+OK  200 GET    /api/orders — А видит свои заказы
+OK      проверка: у А ровно 1 заказ
+OK  200 GET    /api/orders?user=6af5716fdce561c203fd56bc — Б пытается отфильтровать заказы А
+OK      проверка: Б не видит чужие заказы (фильтр подменяется на свой)
+OK  404 GET    /api/orders/6af57171dce561c203fd56f0 — Б открывает заказ А по id
+OK  404 PATCH  /api/orders/6af57171dce561c203fd56f0 — Б отменяет заказ А
+OK  200 GET    /api/orders/6af57171dce561c203fd56f0 — А открывает свой заказ
+OK      проверка: items.product подтянут, секретов нет
+OK  403 PATCH  /api/orders/6af57171dce561c203fd56f0 — покупатель сам ставит «оплачен»
+OK  200 PATCH  /api/orders/6af57171dce561c203fd56f0 — администратор: new -> paid
 OK      проверка: статус paid
-OK  200 PATCH  /api/orders/6af56b08cfce9427ca002396 — отмена: paid -> cancelled
-OK  200 GET    /api/products/6af56b08cfce9427ca00238a — остаток после отмены
+OK  409 PATCH  /api/orders/6af57171dce561c203fd56f0 — недопустимый переход paid -> delivered
+OK  200 PATCH  /api/orders/6af57171dce561c203fd56f0 — А отменяет свой оплаченный заказ
+OK      проверка: статус cancelled
+OK  200 GET    /api/products/6af57171dce561c203fd56de [без токена] — остаток после отмены
 OK      проверка: товар вернулся на склад: stock = 3
-OK  409 DELETE /api/users/6af56b08cfce9427ca002383 — нельзя удалить пользователя с заказами
-OK  200 DELETE /api/orders/6af56b08cfce9427ca002396 — удалить заказ
-OK  404 GET    /api/orders/6af56b08cfce9427ca002396 — заказ удалён
+OK  200 GET    /api/orders?status=delivered&limit=50 — администратор видит все заказы
+OK      проверка: доставленных из seed: 3
+OK  409 DELETE /api/users/6af5716fdce561c203fd56bc — нельзя удалить пользователя с заказами
+OK  403 DELETE /api/orders/6af57171dce561c203fd56f0 — покупатель удаляет заказ
+OK  200 DELETE /api/orders/6af57171dce561c203fd56f0 — администратор удаляет заказ
+OK  403 GET    /api/stats/sales-by-category — статистика покупателем
 OK  200 GET    /api/stats/sales-by-category — выручка по категориям
-OK      проверка: есть строки с revenue > 0
-OK  200 GET    /api/stats/orders-by-status — заказы по статусам
 OK      проверка: есть строки
-OK  200 DELETE /api/products/6af56b08cfce9427ca00238a/reviews/6af56b08cfce9427ca00238e — удалить отзыв
+OK  200 GET    /api/stats/orders-by-status — заказы по статусам
+OK  200 POST   /api/auth/refresh [без токена] — обновить пару токенов
+OK      проверка: выдан новый refresh-токен (ротация)
+OK  200 GET    /api/auth/me — новый access-токен работает
+OK  401 POST   /api/auth/refresh [без токена] — повторное использование старого refresh (кража)
+OK      проверка: сервер распознал повторное использование
+OK  401 POST   /api/auth/refresh [без токена] — вся цепочка отозвана: новый refresh тоже не работает
+OK  400 POST   /api/auth/refresh [без токена] — NoSQL-инъекция в refreshToken
+OK  200 POST   /api/auth/login [без токена] — снова вход А
+OK  200 POST   /api/auth/logout [без токена] — выход
+OK  401 POST   /api/auth/refresh [без токена] — после выхода refresh не работает
+OK  200 POST   /api/auth/login [без токена] — вход А перед сменой пароля
+OK  401 PATCH  /api/auth/password — неверный текущий пароль
+OK  400 PATCH  /api/auth/password — слабый новый пароль
+OK  200 PATCH  /api/auth/password — смена пароля
+OK  401 GET    /api/auth/me — старый access-токен после смены пароля
+OK      проверка: сообщение «пароль был изменён»
+OK  401 POST   /api/auth/refresh [без токена] — старый refresh после смены пароля
+OK  200 GET    /api/auth/me — новый access-токен работает
+OK  401 POST   /api/auth/login [без токена] — вход со старым паролем
+OK  200 POST   /api/auth/login [без токена] — вход с новым паролем
+OK  200 POST   /api/auth/logout-all — завершить все сессии
+OK  201 POST   /api/auth/register [без токена] — пользователь для проверки блокировки
+OK  401 POST   /api/auth/login [без токена] — подбор пароля, попытка 1
+OK  401 POST   /api/auth/login [без токена] — подбор пароля, попытка 2
+OK  401 POST   /api/auth/login [без токена] — подбор пароля, попытка 3
+OK  401 POST   /api/auth/login [без токена] — подбор пароля, попытка 4
+OK  401 POST   /api/auth/login [без токена] — подбор пароля, попытка 5
+OK  423 POST   /api/auth/login [без токена] — правильный пароль, но аккаунт заблокирован
+OK      проверка: сообщение о временной блокировке
+OK  200 DELETE /api/products/6af57171dce561c203fd56de/reviews/6af57171dce561c203fd56e4 — администратор удаляет отзыв
 OK      проверка: rating.count = 0
-OK  200 DELETE /api/products/6af56b08cfce9427ca00238a — удалить товар
-OK  404 GET    /api/products/6af56b08cfce9427ca00238a — товар удалён
-OK  200 DELETE /api/categories/6af56b08cfce9427ca002380 — удалить пустую категорию
-OK  200 DELETE /api/users/6af56b08cfce9427ca002383 — удалить пользователя без заказов
-OK  404 GET    /api/unknown — несуществующий маршрут
-OK  400 POST   /api/categories — битый JSON
+OK  403 DELETE /api/products/6af57171dce561c203fd56de — покупатель удаляет товар
+OK  200 DELETE /api/products/6af57171dce561c203fd56de — удалить товар
+OK  200 DELETE /api/categories/6af57171dce561c203fd56cc — удалить пустую категорию
+OK  409 DELETE /api/users/6af57155f50361ce0c57d60b — админ не может удалить сам себя
+OK  200 DELETE /api/users/6af5716fdce561c203fd56bc — удалить пользователя А
+OK  200 DELETE /api/users/6af57170dce561c203fd56c1 — удалить пользователя Б
+OK  200 DELETE /api/users/6af57173dce561c203fd5715 — удалить пользователя для блокировки
+OK  200 DELETE /api/users/6af57171dce561c203fd56d9 — удалить пользователя созданного админом
+OK  401 GET    /api/auth/me — токен удалённого пользователя не работает
+OK  404 GET    /api/unknown [без токена] — несуществующий маршрут
+OK  400 POST   /api/auth/login [без токена] — битый JSON
+OK  413 POST   /api/auth/login [без токена] — слишком большое тело запроса
 
-Итого: запросов 64, проверок 38, ошибок 0
+Итого: запросов 121, проверок 56, ошибок 0

@@ -1,193 +1,158 @@
-# Shop API — интернет-магазин электроники (Express + Mongoose + MongoDB)
+# Shop API (secure) — безопасный REST API интернет-магазина
 
-Учебный проект по теме **«Проектирование базы данных и интеграция MongoDB с Backend-приложением»**.
+Учебный проект по теме **«Разработка безопасного Backend-приложения»**.
+Node.js + Express 5 + MongoDB (Mongoose 9): регистрация, JWT-аутентификация, авторизация по ролям, CRUD и защита маршрутов.
 
 Цели:
-1. Изучить методы моделирования данных (embedding / referencing, паттерны snapshot, computed, attribute).
-2. Исследовать интеграцию MongoDB и Mongoose (схемы, валидация, индексы, middleware, populate, aggregation).
-3. Реализовать CRUD в серверном приложении.
+- **знание:** изучить современные методы обеспечения безопасности веб-приложений;
+- **понимание:** исследовать механизмы JWT-аутентификации, авторизации пользователей и защиты REST API;
+- **применение:** разработать серверное приложение на Node.js, Express и MongoDB с регистрацией, аутентификацией, CRUD-операциями и защитой маршрутов.
 
-**Предметная область:** интернет-магазин электроники в Казахстане. Покупатели (с адресами) оформляют заказы на товары из категорий и оставляют отзывы.
+Основа — интернет-магазин из предыдущей работы: категории, товары с отзывами, пользователи с адресами, заказы. В этой работе добавлен слой безопасности.
 
-| Коллекция | Что хранит | Связи |
-|---|---|---|
-| `categories` | Категории каталога | ← products.category |
-| `products` | Товары, встроенные **отзывы** и **характеристики** | → categories (ref), reviews.user → users (ref) |
-| `users` | Покупатели, встроенные **адреса** | ← orders.user |
-| `orders` | Заказы, встроенные **позиции** и **адрес доставки** (копии) | → users (ref), items.product → products (ref) |
+## Что реализовано
 
-ER-диаграмма, обоснование embedding/referencing и список индексов — в [docs/data-model.md](docs/data-model.md).
+| Механизм | Как |
+|---|---|
+| Регистрация | `POST /api/auth/register`, политика паролей, роль всегда `customer` |
+| Хранение паролей | bcrypt (12 раундов), поле скрыто от выборок и ответов |
+| Аутентификация | Access JWT (HS256, 15 мин) + refresh-токен (7 дней, в БД только SHA-256-хеш) |
+| Ротация refresh-токенов | Одноразовые; повторное использование → отзыв всей цепочки (защита от кражи) |
+| Выход | `logout` (одна сессия), `logout-all` (все устройства) |
+| Смена пароля | Все старые access- и refresh-токены перестают работать (`tokenVersion`) |
+| Авторизация | Роли `customer` / `admin`, `authorize('admin')`, владелец ресурса (только свои заказы и отзывы) |
+| Защита от подбора | Блокировка аккаунта на 15 мин после 5 неудач (423) + rate limit по IP (429) |
+| Защита от инъекций | Поля входа — строго строки, `sanitizeFilter`, белые списки полей и фильтров, экранирование regex |
+| HTTP-защита | Helmet (CSP, HSTS, X-Frame-Options…), CORS по списку адресов, лимит тела 100 КБ, без `X-Powered-By` |
+| Конфигурация | Секреты только в `.env`; сервер не стартует без надёжного `JWT_ACCESS_SECRET` |
+
+Подробно (схемы входа и ротации токенов, матрица доступа, соответствие OWASP API Top 10): [docs/security.md](docs/security.md).
+Модель данных и ER-диаграмма: [docs/data-model.md](docs/data-model.md).
 
 ## Стек
 
-- Node.js ≥ 20.12 (проверено на 24.21), Express 5, Mongoose 9
-- MongoDB 8+ (проверено на службе MongoDB 9.0 под Windows; подойдёт и MongoDB Atlas), MongoDB Compass для просмотра
-- Тесты: `node:test` + `mongodb-memory-server` (временная БД в памяти)
+Node.js ≥ 20.12 (проверено на 24.21), Express 5.3, Mongoose 9.12, MongoDB 9.0, jsonwebtoken 9, bcryptjs 3, helmet 8, cors 2, express-rate-limit 8. Тесты — `node:test` + `mongodb-memory-server`.
 
 ## Структура
 
 ```
 src/
-  config.js            переменные окружения (.env)
-  db.js                подключение к MongoDB
-  app.js               Express-приложение, маршруты, обработка ошибок
-  server.js            запуск сервера, корректное завершение
-  models/              схемы Mongoose: Category, Product, User, Order, schemas/address
-  controllers/         crudFactory (общий CRUD) + логика каждой сущности, statsController
-  routes/index.js      маршруты /api/*
-  middleware/          validateId (проверка ObjectId), errorHandler (единый формат ошибок)
-  utils/               ApiError, разбор query-параметров (пагинация, сортировка, фильтры)
-scripts/
-  seed.js, seed-data.js  тестовые данные
-  smoke.js               прогон всех запросов против запущенного сервера
-test/api.test.js       автотест (seed + все сценарии на временной БД)
-requests.http          все запросы для VS Code REST Client
-postman/               Postman-коллекция (импорт в Postman)
-docs/                  модель данных, лог проверочного прогона
+  config.js                 настройки из .env, проверка секрета
+  app.js, server.js         Express-приложение, запуск
+  models/                   User (пароль, блокировка, tokenVersion), RefreshToken (TTL), Category, Product, Order
+  services/tokenService.js  выпуск и проверка JWT, ротация refresh-токенов
+  middleware/auth.js        authenticate (кто ты?) и authorize (что тебе можно?)
+  middleware/security.js    Helmet, CORS, rate limit
+  middleware/errorHandler.js единый формат ошибок
+  controllers/              authController + CRUD сущностей (crudFactory с фильтром видимости scope)
+  routes/index.js           маршруты и матрица доступа
+scripts/                    seed (тестовые данные), smoke (прогон всех запросов)
+test/api.test.js            автотесты
+requests.http, postman/     все запросы с токенами
+docs/                       безопасность, модель данных, ER-диаграмма, лог проверки
 ```
 
 ## Запуск
 
-### 1. Установить MongoDB
+1. Установить MongoDB (служба `MongoDB Server` или MongoDB Atlas) и Node.js.
+2. Зависимости:
 
-**Вариант А — локально (Windows):** установить [MongoDB Community Server](https://www.mongodb.com/try/download/community) как службу и [MongoDB Compass](https://www.mongodb.com/try/download/compass). Или через winget:
+   ```bash
+   npm install
+   ```
 
-```bash
-winget install MongoDB.Server
-```
+3. Создать `.env` из примера и вписать секрет:
 
-```bash
-winget install MongoDB.Compass.Full
-```
+   ```bash
+   copy .env.example .env
+   ```
 
-**Вариант Б — MongoDB Atlas:** создать бесплатный кластер M0, пользователя БД, разрешить свой IP, скопировать строку подключения `mongodb+srv://...` в `.env`.
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+   ```
 
-### 2. Установить зависимости и настроить окружение
+   Полученную строку вставить в `JWT_ACCESS_SECRET`. С заглушкой из примера сервер не запустится — это намеренно.
 
-```bash
-npm install
-```
+4. Заполнить базу и запустить:
 
-```bash
-copy .env.example .env
-```
+   ```bash
+   npm run seed
+   ```
 
-В `.env` при необходимости поменять `MONGODB_URI` (по умолчанию `mongodb://127.0.0.1:27017/shop_db`).
+   ```bash
+   npm start
+   ```
 
-### 3. Заполнить базу и запустить сервер
+   Сервер: http://localhost:3000, база `shop_secure_db`.
 
-```bash
-npm run seed
-```
+5. Проверить:
 
-```bash
-npm start
-```
+   ```bash
+   npm run smoke
+   ```
 
-Сервер: http://localhost:3000. Режим разработки с автоперезапуском — `npm run dev`.
+   121 запрос и 56 проверок против запущенного сервера, включая атаки (поддельный JWT, alg=none, NoSQL-инъекции, чужие заказы, повторный refresh, подбор пароля). Лог — [docs/smoke-run.txt](docs/smoke-run.txt).
 
-> Если в консоли Windows русский текст выглядит «кракозябрами», выполните `chcp 65001`.
+   ```bash
+   npm test
+   ```
 
-### 4. Проверить
+   Автотесты на временной БД (5 тестов, в т.ч. rate limit 429).
 
-```bash
-npm run smoke
-```
+**Тестовые пользователи** после `npm run seed`: администратор `admin@example.com` и покупатели `aidos@example.com`, `dana@example.com` и др. Пароли — в `TEST_PASSWORDS` в [scripts/seed-data.js](scripts/seed-data.js) (учебные значения, в БД хранятся только хеши).
 
-прогоняет 64 запроса и 38 проверок против запущенного сервера (создаёт свои записи и удаляет их — seed-данные не трогает). Лог последнего прогона — [docs/smoke-run.txt](docs/smoke-run.txt).
-
-```bash
-npm test
-```
-
-автотест на временной БД в памяти (живая БД не нужна).
-
-### 5. Открыть базу в MongoDB Compass
-
-Подключение `mongodb://127.0.0.1:27017` → база `shop_db` → коллекции `categories`, `products`, `users`, `orders`. Вкладка **Indexes** показывает индексы из схем, **Schema** — структуру документов.
+> Счётчик rate limit хранится в памяти процесса: после перезапуска сервера он обнуляется. Чтобы показать ответ 429, поставьте `AUTH_RATE_LIMIT_MAX=3` в `.env` и перезапустите сервер.
 
 ## API
 
-Базовый URL: `http://localhost:3000/api`
+### Аутентификация `/api/auth`
 
-| Сущность | Список | Один | Создать | Изменить | Удалить |
-|---|---|---|---|---|---|
-| Категории | `GET /categories` | `GET /categories/:id` | `POST /categories` | `PATCH /categories/:id` | `DELETE /categories/:id` |
-| Товары | `GET /products` | `GET /products/:id` | `POST /products` | `PATCH /products/:id` | `DELETE /products/:id` |
-| Отзывы (встроенные) | `GET /products/:id/reviews` | — | `POST /products/:id/reviews` | `PATCH /products/:id/reviews/:reviewId` | `DELETE /products/:id/reviews/:reviewId` |
-| Пользователи | `GET /users` | `GET /users/:id` | `POST /users` | `PATCH /users/:id` | `DELETE /users/:id` |
-| Заказы | `GET /orders` | `GET /orders/:id` | `POST /orders` | `PATCH /orders/:id` | `DELETE /orders/:id` |
+| Метод и путь | Доступ | Тело | Ответ |
+|---|---|---|---|
+| `POST /register` | все | `name, email, password, phone?, addresses?` | 201 `{ data, accessToken, refreshToken }` |
+| `POST /login` | все | `email, password` | 200 `{ data, accessToken, refreshToken }` |
+| `POST /refresh` | все | `refreshToken` | 200 новая пара токенов |
+| `POST /logout` | все | `refreshToken` | 200 |
+| `POST /logout-all` | вошедший | — | 200, все сессии завершены |
+| `GET /me` | вошедший | — | свой профиль |
+| `PATCH /me` | вошедший | `name, phone, addresses` | свой профиль (role и email не меняются) |
+| `PATCH /password` | вошедший | `currentPassword, newPassword` | 200 + новая пара токенов |
 
-Дополнительно: `GET /api/health`, `GET /api/stats/sales-by-category`, `GET /api/stats/orders-by-status` (aggregation pipeline).
+Защищённые запросы — с заголовком:
 
-### Пагинация и сортировка (для всех списков)
-
-`?page=2&limit=10&sort=-price,name` — `limit` от 1 до 100 (по умолчанию 10), `-` перед полем — по убыванию. Сортировать можно только по разрешённым полям (иначе 400).
-
-Ответ списка:
-
-```json
-{ "data": [ ... ], "meta": { "page": 1, "limit": 2, "total": 12, "pages": 6 } }
+```http
+Authorization: Bearer <accessToken>
 ```
 
-### Фильтры
+### Ресурсы
 
-| Ресурс | Параметры |
-|---|---|
-| `/categories` | `q` — поиск по названию |
-| `/products` | `category`, `minPrice`, `maxPrice`, `inStock=true/false`, `tag` (можно несколько), `minRating`, `isActive`, `q` — полнотекстовый поиск |
-| `/users` | `role`, `q` — по имени/email, `city` — по городу во встроенных адресах; `GET /users/:id?include=orders` — с заказами |
-| `/orders` | `status`, `user`, `from`, `to` (YYYY-MM-DD), `minTotal`, `maxTotal` |
+| Ресурс | Чтение | Запись |
+|---|---|---|
+| `/api/categories`, `/api/products` | все | admin |
+| `/api/products/:id/reviews` | все | создать — вошедший; изменить/удалить — автор или admin |
+| `/api/orders` | вошедший (покупатель — только свои) | создать — вошедший; отменить — владелец; статусы — admin; удалить — admin |
+| `/api/users` | admin | admin |
+| `/api/stats/sales-by-category`, `/orders-by-status` | admin | — |
 
-### Бизнес-правила
+Полная матрица доступа — в [docs/security.md](docs/security.md#2-авторизация-матрица-доступа).
 
-- **Заказ:** сервер сам берёт цены и названия из товаров (копия), считает `total`, списывает остаток атомарно; если товара не хватает — 409 и откат. Адрес доставки — из запроса или адрес пользователя по умолчанию.
-- **Статусы заказа:** `new → paid → shipped → delivered`, отмена `cancelled` возможна из `new` и `paid` (товары возвращаются на склад). Другие переходы — 409.
-- Нельзя удалить категорию с товарами и пользователя с заказами (409).
-- `rating` товара считается сервером по отзывам; один пользователь — один отзыв на товар.
-- Из тела запроса берутся только разрешённые поля (нельзя подменить `_id`, `rating`, `total`).
+Списки поддерживают `?page=&limit=&sort=` и фильтры (товары: `category, minPrice, maxPrice, inStock, tag, minRating, q`; заказы: `status, from, to, minTotal, maxTotal`; пользователи: `role, q, city`).
 
-### Формат ошибок
-
-```json
-{ "error": { "status": 400, "message": "Ошибка валидации", "details": { "price": "Цена не может быть отрицательной" } } }
-```
+### Коды ответов
 
 | Код | Когда |
 |---|---|
-| 400 | Ошибка валидации, некорректный ObjectId, неверный параметр фильтра, битый JSON |
-| 404 | Документ или маршрут не найден |
-| 409 | Дубликат (unique-индекс), недопустимый переход статуса, нехватка товара, удаление связанной записи |
-| 500 | Непредвиденная ошибка сервера |
+| 400 | Ошибка валидации, слабый пароль, некорректный id или параметр, поле не строка (попытка инъекции) |
+| 401 | Нет токена, токен недействителен/просрочен/подделан, неверный email или пароль |
+| 403 | Недостаточно прав (роль или чужой отзыв) |
+| 404 | Не найдено, в том числе чужой заказ |
+| 409 | Дубликат, конфликт статуса, нехватка товара |
+| 413 | Тело запроса больше 100 КБ |
+| 423 | Аккаунт временно заблокирован после неудачных входов |
+| 429 | Превышен лимит запросов |
 
-### Примеры
+Формат ошибки: `{ "error": { "status": 401, "message": "Срок действия токена истёк" } }`.
 
-Создать заказ:
+### Postman
 
-```http
-POST /api/orders
-Content-Type: application/json
-
-{ "user": "<id пользователя>", "items": [{ "product": "<id товара>", "quantity": 2 }] }
-```
-
-Выручка по категориям (`GET /api/stats/sales-by-category`) на seed-данных:
-
-| Категория | Выручка, ₸ | Продано шт. | Заказов |
-|---|---|---|---|
-| Смартфоны | 869 960 | 4 | 3 |
-| Ноутбуки | 839 980 | 2 | 2 |
-| Аудио | 254 970 | 3 | 3 |
-| Аксессуары | 135 950 | 5 | 4 |
-
-Все остальные запросы — в [requests.http](requests.http) и [postman/shop-api.postman_collection.json](postman/shop-api.postman_collection.json) (в Postman: Import → файл → Run collection; id сохраняются в переменные коллекции автоматически).
-
-## Скрипты
-
-| Команда | Что делает |
-|---|---|
-| `npm start` | запуск сервера |
-| `npm run dev` | запуск с автоперезапуском (`node --watch`) |
-| `npm run seed` | очистить коллекции и заполнить тестовыми данными (4 категории, 12 товаров, 6 пользователей, 8 заказов) |
-| `npm run smoke` | проверить все запросы против запущенного сервера |
-| `npm test` | автотест на временной БД |
+Import → [postman/shop-api.postman_collection.json](postman/shop-api.postman_collection.json) → Run collection. 58 запросов в 8 папках, токены `adminToken`, `customerToken`, `aidosToken` и id сохраняются в переменные коллекции автоматически. Те же запросы для VS Code REST Client — [requests.http](requests.http).

@@ -1,99 +1,217 @@
-# Все запросы API. Запускать по порядку сверху вниз (id подставляются автоматически).
+# Все запросы API с JWT. Запускать по порядку сверху вниз: токены и id подставляются автоматически.
 # VS Code: расширение «REST Client» -> «Send Request» над запросом.
-# Перед запуском: npm run seed && npm start
+# Перед запуском: npm run seed && npm start. Пароли тестовых пользователей — scripts/seed-data.js.
 
 @baseUrl = http://localhost:3000
 
-# ======================== Служебное ========================
+# ======================== 1. Аутентификация ========================
 
-### Проверка сервера и БД (ожидается 200)
+### Проверка сервера (ожидается 200)
+# @name health
 GET {{baseUrl}}/api/health
 
-# ======================== Категории ========================
+### Регистрация покупателя (role=admin игнорируется) (ожидается 201)
+# @name register
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
 
-### Список категорий (пагинация, сортировка) (ожидается 200)
+{
+  "name": "Студент Тестов",
+  "email": "student{{$timestamp}}@example.com",
+  "password": "Str0ngPass1",
+  "role": "admin",
+  "addresses": [
+    {
+      "label": "Дом",
+      "city": "Семей",
+      "street": "ул. Глинки, 20",
+      "zip": "071400"
+    }
+  ]
+}
+
+### Регистрация со слабым паролем — 400 (ожидается 400)
+# @name registerWeak
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "name": "Слабый",
+  "email": "weak{{$timestamp}}@example.com",
+  "password": "12345"
+}
+
+### Вход администратора (ожидается 200)
+# @name loginAdmin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@example.com",
+  "password": "Admin2026secure"
+}
+
+### Вход покупателя Айдоса (seed) (ожидается 200)
+# @name loginAidos
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "aidos@example.com",
+  "password": "Customer2026"
+}
+
+### Неверный пароль — 401 (ожидается 401)
+# @name loginWrong
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "aidos@example.com",
+  "password": "WrongPass1"
+}
+
+### NoSQL-инъекция при входе — 400 (ожидается 400)
+# @name loginInjection
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": {
+    "$ne": null
+  },
+  "password": {
+    "$ne": null
+  }
+}
+
+### Мой профиль (ожидается 200)
+# @name me
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{register.response.body.accessToken}}
+
+### Профиль без токена — 401 (ожидается 401)
+# @name meNoToken
+GET {{baseUrl}}/api/auth/me
+
+### Изменить свой профиль (role не меняется) (ожидается 200)
+# @name updateMe
+PATCH {{baseUrl}}/api/auth/me
+Authorization: Bearer {{register.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "phone": "+77071234567",
+  "role": "admin"
+}
+
+### Обновить токены (ротация refresh) (ожидается 200)
+# @name refresh
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{register.response.body.refreshToken}}"
+}
+
+### Повторно старый refresh — 401 (кража, цепочка отозвана) (ожидается 401)
+# @name refreshReuse
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{register.response.body.refreshToken}}"
+}
+
+### Новый refresh тоже отозван — 401 (ожидается 401)
+# @name refreshRevoked
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refresh.response.body.refreshToken}}"
+}
+
+### Снова вход нового покупателя (ожидается 200)
+# @name loginCustomer
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{register.request.body.$.email}}",
+  "password": "Str0ngPass1"
+}
+
+# ======================== 2. Атаки на токен ========================
+
+### Мусор вместо токена — 401 (ожидается 401)
+# @name garbage
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer not.a.jwt
+
+### Поддельный токен alg=none с role=admin — 401 (ожидается 401)
+# @name algNone
+GET {{baseUrl}}/api/stats/orders-by-status
+Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiI2NGIwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJyb2xlIjoiYWRtaW4iLCJ2ZXIiOjB9.
+
+### Токен, подписанный чужим ключом — 401 (ожидается 401)
+# @name foreignKey
+GET {{baseUrl}}/api/stats/orders-by-status
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYWRtaW4iLCJ2ZXIiOjAsImlhdCI6MTc5NDQ3MDM0OCwiZXhwIjoyMTA5ODMwMzQ4LCJhdWQiOiJzaG9wLWFwaS1jbGllbnQiLCJpc3MiOiJzaG9wLWFwaSIsInN1YiI6IjY0YjAwMDAwMDAwMDAwMDAwMDAwMDAwMCJ9.H1O5X2GsVaEw1uM6kk8AmPonRkY21tuK-wSyQgfMX-I
+
+# ======================== 3. Каталог (читают все, меняет admin) ========================
+
+### Категории без входа (ожидается 200)
+# @name categories
 GET {{baseUrl}}/api/categories?page=1&limit=10&sort=name
 
-### Поиск категории по названию (ожидается 200)
-GET {{baseUrl}}/api/categories?q=ауд
-
-### Создать категорию (ожидается 201)
-# @name category
+### Создать категорию без входа — 401 (ожидается 401)
+# @name catNoToken
 POST {{baseUrl}}/api/categories
 Content-Type: application/json
 
 {
   "name": "Игровые консоли",
-  "slug": "consoles",
-  "description": "Игровые приставки и геймпады"
+  "slug": "consoles"
 }
 
-### Получить категорию по id (ожидается 200)
-GET {{baseUrl}}/api/categories/{{category.response.body.data._id}}
+### Создать категорию покупателем — 403 (ожидается 403)
+# @name catCustomer
+POST {{baseUrl}}/api/categories
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
+Content-Type: application/json
 
-### Изменить категорию (ожидается 200)
-PATCH {{baseUrl}}/api/categories/{{category.response.body.data._id}}
+{
+  "name": "Игровые консоли",
+  "slug": "consoles"
+}
+
+### Создать категорию (admin) (ожидается 201)
+# @name catCreate
+POST {{baseUrl}}/api/categories
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Игровые консоли",
+  "slug": "consoles",
+  "description": "Приставки и геймпады"
+}
+
+### Изменить категорию (admin) (ожидается 200)
+# @name catUpdate
+PATCH {{baseUrl}}/api/categories/{{catCreate.response.body.data._id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 Content-Type: application/json
 
 {
   "description": "Приставки, геймпады и аксессуары"
 }
 
-# ======================== Пользователи ========================
-
-### Список покупателей (ожидается 200)
-GET {{baseUrl}}/api/users?role=customer&sort=name&page=1&limit=10
-
-### Пользователи с адресом в городе (встроенный массив) (ожидается 200)
-GET {{baseUrl}}/api/users?city=Алматы
-
-### Создать пользователя (ожидается 201)
-# @name user
-POST {{baseUrl}}/api/users
-Content-Type: application/json
-
-{
-  "name": "Нурсултан Абенов",
-  "email": "nursultan@example.com",
-  "phone": "+77019998877",
-  "addresses": [
-    {
-      "label": "Дом",
-      "city": "Караганда",
-      "street": "пр. Бухар-Жырау, 45",
-      "zip": "100000"
-    }
-  ]
-}
-
-### Получить пользователя с заказами (virtual populate) (ожидается 200)
-GET {{baseUrl}}/api/users/{{user.response.body.data._id}}?include=orders
-
-### Изменить пользователя (ожидается 200)
-PATCH {{baseUrl}}/api/users/{{user.response.body.data._id}}
-Content-Type: application/json
-
-{
-  "phone": "+77017776655"
-}
-
-# ======================== Товары ========================
-
-### Каталог (без отзывов, с категорией) (ожидается 200)
-GET {{baseUrl}}/api/products?page=1&limit=5
-
-### Фильтр: цена, наличие, сортировка по цене (ожидается 200)
-GET {{baseUrl}}/api/products?minPrice=50000&maxPrice=300000&inStock=true&sort=-price
-
-### Полнотекстовый поиск (ожидается 200)
-GET {{baseUrl}}/api/products?q=наушники
-
-### Фильтр по тегам (ожидается 200)
-GET {{baseUrl}}/api/products?tag=android&tag=samsung
-
-### Создать товар (ожидается 201)
-# @name product
+### Создать товар (admin) (ожидается 201)
+# @name prodCreate
 POST {{baseUrl}}/api/products
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 Content-Type: application/json
 
 {
@@ -101,28 +219,39 @@ Content-Type: application/json
   "sku": "PS5-SLIM",
   "price": 299990,
   "stock": 4,
-  "category": "{{category.response.body.data._id}}",
+  "category": "{{catCreate.response.body.data._id}}",
   "tags": [
     "консоль",
     "sony"
-  ],
-  "attributes": [
-    {
-      "key": "Накопитель",
-      "value": "SSD 1 ТБ"
-    }
-  ],
-  "description": "Игровая консоль нового поколения"
+  ]
 }
 
-### Товары категории (ожидается 200)
-GET {{baseUrl}}/api/products?category={{category.response.body.data._id}}
+### Каталог: фильтр и сортировка (без входа) (ожидается 200)
+# @name products
+GET {{baseUrl}}/api/products?minPrice=50000&maxPrice=300000&inStock=true&sort=-price
 
-### Получить товар (populate category и reviews.user) (ожидается 200)
-GET {{baseUrl}}/api/products/{{product.response.body.data._id}}
+### Полнотекстовый поиск (ожидается 200)
+# @name prodSearch
+GET {{baseUrl}}/api/products?q=наушники
 
-### Изменить цену и остаток (ожидается 200)
-PATCH {{baseUrl}}/api/products/{{product.response.body.data._id}}
+### Товар по id (ожидается 200)
+# @name prodGet
+GET {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}
+
+### Изменить цену покупателем — 403 (ожидается 403)
+# @name prodCustomer
+PATCH {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "price": 1
+}
+
+### Изменить цену (admin) (ожидается 200)
+# @name prodUpdate
+PATCH {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 Content-Type: application/json
 
 {
@@ -130,22 +259,42 @@ Content-Type: application/json
   "stock": 5
 }
 
-### Добавить отзыв (встроенный документ) (ожидается 201)
-# @name review
-POST {{baseUrl}}/api/products/{{product.response.body.data._id}}/reviews
+# ======================== 4. Отзывы (автор из токена) ========================
+
+### Отзыв без входа — 401 (ожидается 401)
+# @name reviewNoToken
+POST {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}/reviews
 Content-Type: application/json
 
 {
-  "user": "{{user.response.body.data._id}}",
+  "rating": 5
+}
+
+### Оставить отзыв (ожидается 201)
+# @name reviewAdd
+POST {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}/reviews
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
+Content-Type: application/json
+
+{
   "rating": 5,
   "comment": "Отличная консоль"
 }
 
-### Отзывы товара (ожидается 200)
-GET {{baseUrl}}/api/products/{{product.response.body.data._id}}/reviews
+### Чужой отзыв изменить — 403 (ожидается 403)
+# @name reviewForeign
+PATCH {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}/reviews/{{reviewAdd.response.body.data._id}}
+Authorization: Bearer {{loginAidos.response.body.accessToken}}
+Content-Type: application/json
 
-### Изменить отзыв (ожидается 200)
-PATCH {{baseUrl}}/api/products/{{product.response.body.data._id}}/reviews/{{review.response.body.data._id}}
+{
+  "rating": 1
+}
+
+### Свой отзыв изменить (ожидается 200)
+# @name reviewUpdate
+PATCH {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}/reviews/{{reviewAdd.response.body.data._id}}
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
 Content-Type: application/json
 
 {
@@ -153,114 +302,178 @@ Content-Type: application/json
   "comment": "Хорошая, но шумная"
 }
 
-# ======================== Заказы ========================
+### Отзывы товара (без входа) (ожидается 200)
+# @name reviews
+GET {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}/reviews
 
-### Список заказов по статусу (ожидается 200)
-GET {{baseUrl}}/api/orders?status=new&sort=-createdAt
+# ======================== 5. Заказы (покупатель — только свои) ========================
 
-### Заказы за период от суммы (ожидается 200)
-GET {{baseUrl}}/api/orders?from=2026-11-01&to=2026-12-31&minTotal=100000&sort=-total
+### Заказы без входа — 401 (ожидается 401)
+# @name orderNoToken
+GET {{baseUrl}}/api/orders
 
-### Создать заказ (адрес из профиля, остаток списывается) (ожидается 201)
-# @name order
+### Оформить заказ (ожидается 201)
+# @name orderCreate
 POST {{baseUrl}}/api/orders
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
 Content-Type: application/json
 
 {
-  "user": "{{user.response.body.data._id}}",
   "items": [
     {
-      "product": "{{product.response.body.data._id}}",
+      "product": "{{prodCreate.response.body.data._id}}",
       "quantity": 2
     }
   ],
   "comment": "Доставка после 18:00"
 }
 
-### Получить заказ (ожидается 200)
-GET {{baseUrl}}/api/orders/{{order.response.body.data._id}}
+### Мои заказы (ожидается 200)
+# @name ordersMine
+GET {{baseUrl}}/api/orders
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
 
-### Заказы пользователя (ожидается 200)
-GET {{baseUrl}}/api/orders?user={{user.response.body.data._id}}
+### Чужой заказ по id — 404 (ожидается 404)
+# @name orderForeign
+GET {{baseUrl}}/api/orders/{{orderCreate.response.body.data._id}}
+Authorization: Bearer {{loginAidos.response.body.accessToken}}
 
-### Оплатить заказ (new → paid) (ожидается 200)
-PATCH {{baseUrl}}/api/orders/{{order.response.body.data._id}}
+### Покупатель сам ставит «оплачен» — 403 (ожидается 403)
+# @name orderPayCustomer
+PATCH {{baseUrl}}/api/orders/{{orderCreate.response.body.data._id}}
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
 Content-Type: application/json
 
 {
   "status": "paid"
 }
 
-### Недопустимый переход (paid → delivered) — 409 (ожидается 409)
-PATCH {{baseUrl}}/api/orders/{{order.response.body.data._id}}
+### Оплата (admin): new → paid (ожидается 200)
+# @name orderPay
+PATCH {{baseUrl}}/api/orders/{{orderCreate.response.body.data._id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 Content-Type: application/json
 
 {
-  "status": "delivered"
+  "status": "paid"
 }
 
-### Отменить заказ (товар вернётся на склад) (ожидается 200)
-PATCH {{baseUrl}}/api/orders/{{order.response.body.data._id}}
+### Покупатель отменяет свой заказ (ожидается 200)
+# @name orderCancel
+PATCH {{baseUrl}}/api/orders/{{orderCreate.response.body.data._id}}
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
 Content-Type: application/json
 
 {
   "status": "cancelled"
 }
 
-### Удалить заказ (ожидается 200)
-DELETE {{baseUrl}}/api/orders/{{order.response.body.data._id}}
+### Все заказы (admin) (ожидается 200)
+# @name ordersAll
+GET {{baseUrl}}/api/orders?sort=-createdAt&limit=20
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 
-# ======================== Статистика (aggregation) ========================
+### Удалить заказ покупателем — 403 (ожидается 403)
+# @name orderDeleteCustomer
+DELETE {{baseUrl}}/api/orders/{{orderCreate.response.body.data._id}}
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
 
-### Выручка по категориям (ожидается 200)
+### Удалить заказ (admin) (ожидается 200)
+# @name orderDelete
+DELETE {{baseUrl}}/api/orders/{{orderCreate.response.body.data._id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ======================== 6. Пользователи и статистика (admin) ========================
+
+### Список пользователей покупателем — 403 (ожидается 403)
+# @name usersCustomer
+GET {{baseUrl}}/api/users
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
+
+### Список пользователей (admin) (ожидается 200)
+# @name users
+GET {{baseUrl}}/api/users?sort=name&limit=20
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### Пользователь с заказами (admin) (ожидается 200)
+# @name userGet
+GET {{baseUrl}}/api/users/{{register.response.body.data._id}}?include=orders
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### Статистика покупателем — 403 (ожидается 403)
+# @name statsCustomer
 GET {{baseUrl}}/api/stats/sales-by-category
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
 
-### Заказы по статусам (ожидается 200)
+### Выручка по категориям (admin) (ожидается 200)
+# @name statsSales
+GET {{baseUrl}}/api/stats/sales-by-category
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### Заказы по статусам (admin) (ожидается 200)
+# @name statsStatus
 GET {{baseUrl}}/api/stats/orders-by-status
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 
-# ======================== Удаление (очистка) ========================
+# ======================== 7. Смена пароля и выход ========================
 
-### Удалить отзыв (ожидается 200)
-DELETE {{baseUrl}}/api/products/{{product.response.body.data._id}}/reviews/{{review.response.body.data._id}}
+### Сменить пароль (старые токены перестают работать) (ожидается 200)
+# @name password
+PATCH {{baseUrl}}/api/auth/password
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
+Content-Type: application/json
 
-### Нельзя удалить категорию с товарами — 409 (ожидается 409)
-DELETE {{baseUrl}}/api/categories/{{category.response.body.data._id}}
+{
+  "currentPassword": "Str0ngPass1",
+  "newPassword": "N3wPassword2"
+}
+
+### Старый токен после смены пароля — 401 (ожидается 401)
+# @name oldToken
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{loginCustomer.response.body.accessToken}}
+
+### Новый токен работает (ожидается 200)
+# @name meNew
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{password.response.body.accessToken}}
+
+### Выход (отзыв refresh-токена) (ожидается 200)
+# @name logout
+POST {{baseUrl}}/api/auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "{{password.response.body.refreshToken}}"
+}
+
+### Refresh после выхода — 401 (ожидается 401)
+# @name refreshAfterLogout
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{password.response.body.refreshToken}}"
+}
+
+# ======================== 8. Очистка (admin) ========================
+
+### Удалить отзыв (admin) (ожидается 200)
+# @name reviewDelete
+DELETE {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}/reviews/{{reviewAdd.response.body.data._id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 
 ### Удалить товар (ожидается 200)
-DELETE {{baseUrl}}/api/products/{{product.response.body.data._id}}
+# @name prodDelete
+DELETE {{baseUrl}}/api/products/{{prodCreate.response.body.data._id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 
 ### Удалить категорию (ожидается 200)
-DELETE {{baseUrl}}/api/categories/{{category.response.body.data._id}}
+# @name catDelete
+DELETE {{baseUrl}}/api/categories/{{catCreate.response.body.data._id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 
-### Удалить пользователя (ожидается 200)
-DELETE {{baseUrl}}/api/users/{{user.response.body.data._id}}
-
-# ======================== Ошибки ========================
-
-### Некорректный id — 400 (ожидается 400)
-GET {{baseUrl}}/api/products/123
-
-### Не найдено — 404 (ожидается 404)
-GET {{baseUrl}}/api/products/64b000000000000000000000
-
-### Ошибка валидации — 400 (ожидается 400)
-POST {{baseUrl}}/api/products
-Content-Type: application/json
-
-{
-  "name": "X",
-  "sku": "плохой",
-  "price": -5
-}
-
-### Дубликат email — 409 (ожидается 409)
-POST {{baseUrl}}/api/users
-Content-Type: application/json
-
-{
-  "name": "Дубль",
-  "email": "aidos@example.com"
-}
-
-### Сортировка по запрещённому полю — 400 (ожидается 400)
-GET {{baseUrl}}/api/products?sort=secret
+### Удалить тестового покупателя (ожидается 200)
+# @name userDelete
+DELETE {{baseUrl}}/api/users/{{register.response.body.data._id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}

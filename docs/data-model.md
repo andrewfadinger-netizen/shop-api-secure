@@ -1,6 +1,8 @@
 # Модель данных: интернет-магазин электроники
 
-База `shop_db`, 4 коллекции: **categories**, **products**, **users**, **orders**.
+База `shop_secure_db`, 5 коллекций: **categories**, **products**, **users**, **orders**, **refreshtokens**.
+
+Что добавлено для безопасности: в `users` — `password` (bcrypt-хеш), `tokenVersion`, `passwordChangedAt`, `failedLoginAttempts`, `lockUntil`; новая коллекция `refreshtokens` (сессии). Подробно — [security.md](security.md).
 
 ## ER-диаграмма
 
@@ -15,6 +17,7 @@ erDiagram
     USER ||--o{ ORDER : "orders.user (ref)"
     PRODUCT ||--o{ ORDER_ITEM : "items.product (ref)"
     USER ||--o{ REVIEW : "reviews.user (ref)"
+    USER ||--o{ REFRESH_TOKEN : "refreshtokens.user (ref)"
 
     PRODUCT ||--|{ REVIEW : "встроено: reviews[]"
     PRODUCT ||--|{ ATTRIBUTE : "встроено: attributes[]"
@@ -61,8 +64,24 @@ erDiagram
         string email UK
         string phone "+7XXXXXXXXXX"
         string role "customer или admin"
+        string password "bcrypt-хеш, select false"
+        number tokenVersion "версия JWT"
+        date passwordChangedAt
+        number failedLoginAttempts
+        date lockUntil "блокировка входа"
         date createdAt
         date updatedAt
+    }
+    REFRESH_TOKEN {
+        ObjectId _id PK
+        ObjectId user FK "ref User"
+        string tokenHash UK "SHA-256"
+        string family "цепочка ротации"
+        date expiresAt "TTL-индекс"
+        date revokedAt
+        string replacedBy
+        string createdByIp
+        string userAgent
     }
     ADDRESS {
         ObjectId _id
@@ -125,6 +144,11 @@ erDiagram
 | users | `addresses.city_1` (multikey) | Фильтр по полю встроенного массива `?city=` |
 | orders | `user_1_createdAt_-1` | История заказов пользователя, новые сверху |
 | orders | `status_1_createdAt_-1` | Заказы по статусу |
+| refreshtokens | `tokenHash_1` (unique) | Поиск сессии по хешу токена |
+| refreshtokens | `family_1`, `user_1` | Отзыв цепочки при краже, «выйти везде» |
+| refreshtokens | `expiresAt_1` (TTL, expireAfterSeconds: 0) | MongoDB сама удаляет истёкшие сессии |
+
+**Почему сессии — отдельная коллекция, а не массив в users.** Токенов у пользователя может быть много (каждое устройство, каждая ротация), они постоянно добавляются и удаляются, а TTL-индекс работает только на уровне документов. Встраивание раздувало бы документ пользователя и не позволило бы MongoDB удалять просроченные сессии автоматически.
 
 ## Целостность данных (MongoDB сама её не проверяет)
 
