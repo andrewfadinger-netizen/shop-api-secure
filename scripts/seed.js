@@ -1,5 +1,6 @@
 // Заполняет базу тестовыми данными: npm run seed
-// ВНИМАНИЕ: перед заполнением очищает коллекции categories, products, users, orders.
+// ВНИМАНИЕ: перед заполнением очищает коллекции categories, products, users, orders, refreshtokens.
+// Тестовые логины: email из seed-data.js, пароли — TEST_PASSWORDS там же.
 const mongoose = require('mongoose');
 const config = require('../src/config');
 const { connectDB } = require('../src/db');
@@ -7,9 +8,10 @@ const Category = require('../src/models/Category');
 const Product = require('../src/models/Product');
 const User = require('../src/models/User');
 const Order = require('../src/models/Order');
+const RefreshToken = require('../src/models/RefreshToken');
 const data = require('./seed-data');
 
-const MODELS = [Category, Product, User, Order];
+const MODELS = [Category, Product, User, Order, RefreshToken];
 
 async function seed({ log = console.log } = {}) {
   await Promise.all(MODELS.map((M) => M.deleteMany({})));

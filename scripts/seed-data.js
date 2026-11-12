@@ -203,4 +203,12 @@ const orders = [
   { user: 'erzhan@example.com', status: 'new', items: [{ sku: 'ASUS-TUF-F15', quantity: 1 }, { sku: 'LOGI-MX3S', quantity: 1 }] },
 ];
 
-module.exports = { categories, users, products, orders };
+// ТЕСТОВЫЕ пароли учебной базы (в БД попадут только bcrypt-хеши).
+// В реальном проекте такие данные в репозиторий не кладут.
+const TEST_PASSWORDS = {
+  admin: 'Admin2026secure',
+  customer: 'Customer2026',
+};
+for (const u of users) u.password = u.role === 'admin' ? TEST_PASSWORDS.admin : TEST_PASSWORDS.customer;
+
+module.exports = { categories, users, products, orders, TEST_PASSWORDS };
