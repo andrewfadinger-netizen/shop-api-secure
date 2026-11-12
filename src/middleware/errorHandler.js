@@ -34,8 +34,8 @@ function errorHandler(err, req, res, next) {
     status = 400;
     message = 'Некорректный JSON в теле запроса';
   } else if (err && Number.isInteger(err.status) && err.status >= 400 && err.status < 500) {
-    status = err.status; // например, 413 — слишком большое тело запроса
-    message = err.message;
+    status = err.status;
+    message = status === 413 ? 'Слишком большое тело запроса (максимум 100 КБ)' : err.message;
   }
 
   if (status >= 500) console.error(err);
