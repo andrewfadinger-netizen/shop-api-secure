@@ -1,7 +1,7 @@
 const Product = require('../models/Product');
-const User = require('../models/User');
 const ApiError = require('../utils/ApiError');
 const crudFactory = require('./crudFactory');
+const { isAdmin } = require('../middleware/auth');
 const { has, first, toNumber, toBool, toObjectId, pick } = require('../utils/query');
 
 const crud = crudFactory(Product, {
@@ -43,14 +43,12 @@ async function listReviews(req, res) {
   res.json({ data: product.reviews, rating: product.rating });
 }
 
-// POST /api/products/:id/reviews  { user, rating, comment }
+// POST /api/products/:id/reviews  { rating, comment } — автор берётся из токена
 async function addReview(req, res) {
   const body = req.body ?? {};
-  if (!body.user) throw ApiError.badRequest('Поле «user» обязательно');
-  const userId = toObjectId(body.user, 'user');
+  const userId = toObjectId(req.user.id, 'user'); // поле user из тела игнорируется: нельзя писать от чужого имени
 
   const product = await crud.findOr404(req.params.id);
-  if (!(await User.exists({ _id: userId }))) throw ApiError.badRequest('Пользователь не найден');
 
   product.reviews.push({ user: userId, ...pick(body, ['rating', 'comment']) });
   // сначала валидация (оценка 1–5), потом проверка на повторный отзыв
@@ -68,6 +66,10 @@ async function findReviewOr404(req) {
   const product = await crud.findOr404(req.params.id);
   const review = product.reviews.id(req.params.reviewId);
   if (!review) throw ApiError.notFound('Отзыв не найден');
+  // Менять и удалять отзыв может только его автор или администратор
+  if (!isAdmin(req) && !review.user.equals(req.user.id)) {
+    throw new ApiError(403, 'Можно изменять только свои отзывы');
+  }
   return { product, review };
 }
 

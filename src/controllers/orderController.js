@@ -3,7 +3,11 @@ const Product = require('../models/Product');
 const User = require('../models/User');
 const ApiError = require('../utils/ApiError');
 const crudFactory = require('./crudFactory');
+const { isAdmin } = require('../middleware/auth');
 const { has, first, toNumber, toObjectId, toDate, pick } = require('../utils/query');
+
+// Покупатель видит и меняет только свои заказы, администратор — все
+const ownOrders = (req) => (isAdmin(req) ? {} : { user: req.user.id });
 
 // populate для карточки заказа: покупатель + текущие данные товаров
 const DETAIL_POPULATE = [
@@ -16,6 +20,7 @@ const crud = crudFactory(Order, {
   allowedFields: [], // создание и изменение — своя логика ниже
   sortable: ['createdAt', 'updatedAt', 'total', 'status'],
   defaultSort: '-createdAt',
+  scope: ownOrders,
 
   // ?status=&user=&from=2026-11-01&to=2026-11-30&minTotal=&maxTotal=
   buildFilter(q) {
@@ -59,11 +64,12 @@ async function restock(order) {
   );
 }
 
-// POST /api/orders  { user, items: [{ product, quantity }], shippingAddress?, comment? }
+// POST /api/orders  { items: [{ product, quantity }], shippingAddress?, comment?, user? (только admin) }
 async function create(req, res) {
   const body = req.body ?? {};
-  if (!body.user) throw ApiError.badRequest('Поле «user» обязательно');
-  const userId = toObjectId(body.user, 'user');
+  // Покупатель оформляет заказ только на себя: user берётся из токена, а не из тела.
+  // Администратор может оформить заказ за покупателя (поле user).
+  const userId = isAdmin(req) && body.user ? toObjectId(body.user, 'user') : toObjectId(req.user.id, 'user');
   if (!Array.isArray(body.items) || body.items.length === 0) {
     throw ApiError.badRequest('Заказ должен содержать хотя бы один товар (items)');
   }
@@ -142,7 +148,13 @@ async function update(req, res) {
     throw ApiError.badRequest('Нет полей для обновления', { allowed: ['status', 'comment', 'shippingAddress'] });
   }
 
-  const order = await crud.findOr404(req.params.id);
+  // Покупатель может только отменить свой заказ или поправить комментарий/адрес,
+  // оплату и доставку отмечает администратор.
+  if (!isAdmin(req) && changes.status !== undefined && changes.status !== 'cancelled') {
+    throw new ApiError(403, 'Покупатель может только отменить заказ (status: cancelled)');
+  }
+
+  const order = await crud.findOr404(req.params.id, null, req); // чужой заказ -> 404
   const prevStatus = order.status;
 
   if (changes.status !== undefined && changes.status !== prevStatus) {
@@ -166,9 +178,9 @@ async function update(req, res) {
   res.json({ data: order });
 }
 
-// DELETE /api/orders/:id
+// DELETE /api/orders/:id  (только admin — проверка в маршруте)
 async function remove(req, res) {
-  const order = await crud.findOr404(req.params.id);
+  const order = await crud.findOr404(req.params.id, null, req);
   if (order.status === 'shipped') {
     throw ApiError.conflict('Заказ в пути — удалить нельзя, дождитесь доставки');
   }

@@ -1,10 +1,13 @@
 const User = require('../models/User');
 const Order = require('../models/Order');
+const RefreshToken = require('../models/RefreshToken');
 const ApiError = require('../utils/ApiError');
 const crudFactory = require('./crudFactory');
-const { has, first, escapeRegex } = require('../utils/query');
+const { has, first, escapeRegex, pick } = require('../utils/query');
 
-module.exports = crudFactory(User, {
+// Управление пользователями — только для администратора (проверка в маршрутах).
+// Пароль через PATCH не меняется: это делает сам пользователь через /api/auth/password.
+const crud = crudFactory(User, {
   notFound: 'Пользователь не найден',
   allowedFields: ['name', 'email', 'phone', 'role', 'addresses'],
   sortable: ['name', 'email', 'role', 'createdAt', 'updatedAt'],
@@ -34,10 +37,28 @@ module.exports = crudFactory(User, {
       ? { path: 'orders', select: 'status total createdAt', options: { sort: { createdAt: -1 } } }
       : null,
 
-  async beforeDelete(user) {
+  async beforeDelete(user, req) {
+    if (user._id.equals(req.user.id)) throw ApiError.conflict('Нельзя удалить собственную учётную запись администратора');
     const count = await Order.countDocuments({ user: user._id });
     if (count > 0) {
       throw ApiError.conflict(`Нельзя удалить пользователя: у него заказов — ${count}`, { orders: count });
     }
+    await RefreshToken.deleteMany({ user: user._id }); // сессии удалённого пользователя
   },
 });
+
+// POST /api/users — администратор создаёт пользователя (в том числе другого админа) с паролем
+async function create(req, res) {
+  const user = await User.create(pick(req.body, ['name', 'email', 'password', 'phone', 'role', 'addresses']));
+  res.status(201).json({ data: user });
+}
+
+// PATCH /api/users/:id — администратор не может снять роль admin сам с себя (чтобы не остаться без админа)
+async function update(req, res) {
+  if (req.params.id === req.user.id && req.body?.role && req.body.role !== 'admin') {
+    throw ApiError.conflict('Нельзя понизить собственную роль');
+  }
+  return crud.update(req, res);
+}
+
+module.exports = { ...crud, create, update };

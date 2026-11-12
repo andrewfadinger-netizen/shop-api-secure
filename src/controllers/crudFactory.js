@@ -5,6 +5,11 @@ const { parsePagination, pick } = require('../utils/query');
  * Универсальный CRUD-контроллер для модели Mongoose.
  * Общая логика (пагинация, сортировка, 404, белый список полей) — здесь,
  * особенности сущности (фильтры, populate, проверки перед удалением) — в опциях.
+ *
+ * scope(req) — фильтр видимости для текущего пользователя (например,
+ * покупатель видит только свои заказы). Он добавляется к КАЖДОМУ запросу в БД,
+ * поэтому чужой документ невозможно ни получить, ни изменить, ни удалить:
+ * для такого пользователя его как будто нет (404, а не 403 — не раскрываем, что id существует).
  */
 function crudFactory(Model, options) {
   const {
@@ -13,6 +18,7 @@ function crudFactory(Model, options) {
     sortable,
     defaultSort = '-createdAt',
     buildFilter = () => ({}),
+    scope = () => ({}),
     listSelect,
     listPopulate,
     getPopulate,
@@ -25,8 +31,8 @@ function crudFactory(Model, options) {
     if (populate) await doc.populate(populate);
   };
 
-  async function findOr404(id, populate) {
-    const query = Model.findById(id);
+  async function findOr404(id, populate, req) {
+    const query = Model.findOne({ ...(req ? scope(req) : {}), _id: id });
     if (populate) query.populate(populate);
     const doc = await query;
     if (!doc) throw ApiError.notFound(notFound);
@@ -35,7 +41,8 @@ function crudFactory(Model, options) {
 
   // GET /  — список с фильтрами, сортировкой и пагинацией
   async function list(req, res) {
-    const filter = await buildFilter(req.query);
+    // scope идёт последним: его нельзя перебить параметром запроса (?user=чужой_id)
+    const filter = { ...(await buildFilter(req.query, req)), ...scope(req) };
     const { page, limit, skip, sort } = parsePagination(req.query, { defaultSort, sortable });
 
     const query = Model.find(filter).sort(sort).skip(skip).limit(limit);
@@ -48,7 +55,7 @@ function crudFactory(Model, options) {
 
   // GET /:id
   async function get(req, res) {
-    const doc = await findOr404(req.params.id, resolve(getPopulate, req));
+    const doc = await findOr404(req.params.id, resolve(getPopulate, req), req);
     res.json({ data: doc });
   }
 
@@ -66,7 +73,7 @@ function crudFactory(Model, options) {
     if (Object.keys(changes).length === 0) {
       throw ApiError.badRequest('Нет полей для обновления', { allowed: allowedFields });
     }
-    const doc = await findOr404(req.params.id);
+    const doc = await findOr404(req.params.id, null, req);
     doc.set(changes);
     await doc.save();
     await populateDoc(doc, req);
@@ -75,8 +82,8 @@ function crudFactory(Model, options) {
 
   // DELETE /:id
   async function remove(req, res) {
-    const doc = await findOr404(req.params.id);
-    if (beforeDelete) await beforeDelete(doc);
+    const doc = await findOr404(req.params.id, null, req);
+    if (beforeDelete) await beforeDelete(doc, req);
     await doc.deleteOne();
     res.json({ message: 'Удалено', id: doc._id });
   }
